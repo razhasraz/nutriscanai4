@@ -1,0 +1,97 @@
+.nutri-hero {
+    background: linear-gradient(135deg, #064E3B 0%, #0F766E 55%, #10B981 100%);
+    color: #FFFFFF;
+    padding: 1.4rem 1.75rem;
+    border-radius: 16px;
+    margin-bottom: 1.25rem;
+    box-shadow: 0 10px 25px -10px rgba(16, 185, 129, 0.45);
+}
+
+.nutri-hero h1 {
+    margin: 0;
+    font-size: 1.85rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: #FFFFFF;
+}
+
+.nutri-hero p {
+    margin: 0.35rem 0 0 0;
+    font-size: 0.98rem;
+    opacity: 0.92;
+    color: #ECFDF5;
+}
+
+.nutri-card {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 14px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 0.85rem;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.nutri-kpi {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 14px;
+    padding: 0.95rem 1.1rem;
+    text-align: left;
+    background: rgba(16, 185, 129, 0.06);
+}
+
+.nutri-kpi-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.75;
+    margin-bottom: 0.25rem;
+}
+
+.nutri-kpi-value {
+    font-size: 1.55rem;
+    font-weight: 700;
+    line-height: 1.15;
+}
+
+.nutri-badge-ok {
+    display: inline-block;
+    padding: 0.18rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background-color: rgba(16, 185, 129, 0.16);
+    color: #10B981;
+}
+
+.nutri-badge-warn {
+    display: inline-block;
+    padding: 0.18rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background-color: rgba(245, 158, 11, 0.18);
+    color: #D97706;
+}
+
+.nutri-badge-info {
+    display: inline-block;
+    padding: 0.18rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background-color: rgba(59, 130, 246, 0.16);
+    color: #3B82F6;
+}
+
+/* Mobile-first responsive adjustments */
+@media (max-width: 768px) {
+    .nutri-hero {
+        padding: 1rem 1.15rem;
+    }
+    .nutri-hero h1 {
+        font-size: 1.45rem;
+    }
+    .nutri-kpi-value {
+        font-size: 1.25rem;
+    }
+}

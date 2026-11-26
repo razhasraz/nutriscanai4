@@ -1,0 +1,6 @@
+{
+  "name": "NutriScan AI",
+  "description": "Scan. Understand. Nourish. Intelligent food recognition, portion confirmation, and meal nutrition intelligence platform.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

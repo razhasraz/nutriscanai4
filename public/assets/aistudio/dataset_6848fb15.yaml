@@ -1,0 +1,50 @@
+```yaml
+# NutriScan AI — 40-Class YOLO Food Detection Configuration
+path: ./prepared_dataset
+train: images/train
+val: images/val
+test: images/test
+
+nc: 40
+names:
+  0: Roti / Chapati
+  1: Rice
+  2: Dal
+  3: Paneer
+  4: Sabzi
+  5: Idli
+  6: Dosa
+  7: Poha
+  8: Chole
+  9: Samosa
+  10: Biryani
+  11: Paratha
+  12: Puri
+  13: Rajma
+  14: Khichdi
+  15: Upma
+  16: Dhokla
+  17: Uttapam
+  18: Pakora
+  19: Aloo Gobi
+  20: Apple
+  21: Banana
+  22: Orange
+  23: Egg
+  24: Grilled chicken
+  25: Fish
+  26: Burger
+  27: Pizza
+  28: French fries
+  29: Sandwich
+  30: Salad
+  31: Oatmeal
+  32: Yogurt
+  33: Pasta
+  34: Pancakes
+  35: Bread
+  36: Rice bowl
+  37: Soup
+  38: Cake
+  39: Cookies
+
