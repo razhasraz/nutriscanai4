@@ -55,9 +55,10 @@ export const DatabaseView: React.FC = () => {
             including katoris, rotis, pieces, cups, and grams.
           </p>
           <p className="text-xs text-[#294C38] mt-4">
-            <strong>Live Recognition Coverage:</strong> All 40 Indian and international foods below
-            are recognized directly by the NutriScan AI vision scanner and mapped to verified
-            nutritional data.
+            <strong>On-Device Recognition Transparency:</strong> The browser-local COCO-SSD model
+            directly detects Apple, Banana, Orange, Pizza, Sandwich, and Cake, and flags bowls/cups
+            for quick selection across all 40 Indian and international foods—with zero external API
+            keys required.
           </p>
         </div>
         <div className="lg:col-span-5 min-h-[210px] bg-[#E8F0E5]">

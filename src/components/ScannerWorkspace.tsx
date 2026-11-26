@@ -18,31 +18,14 @@ import {
   QUICK_MEAL_PRESETS,
 } from '../data/nutritionData';
 import {
-  DetectionCertainty,
   PlateItemDraft,
   convertToGrams,
   getAvailableUnits,
   getDefaultPortion,
 } from '../engine/nutritionEngine';
+import { detectFoodInBrowser } from '../engine/localDetector';
 
 const HERO_IMAGE_SRC = '/src/assets/images/hero_indian_thali_1795712773089.jpg';
-
-interface ApiDetection {
-  matchedCanonicalFood: string;
-  rawLabel: string;
-  certainty: DetectionCertainty;
-  needsVerification: boolean;
-  suggestedQuantity: number;
-  visualNote: string;
-  box2d: [number, number, number, number] | null;
-}
-
-interface DetectFoodResponse {
-  suggestedMealLabel: string;
-  plateSummary: string;
-  detections: ApiDetection[];
-  error?: string;
-}
 
 interface ScannerWorkspaceProps {
   plateItems: PlateItemDraft[];
@@ -56,40 +39,13 @@ interface ScannerWorkspaceProps {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-/**
- * Downscales any image data URL or image element to a clean JPEG (max 1024px)
- * so AI vision scanning stays fast on mobile networks and well within upload limits.
- */
-async function compressImageSourceToJpegBase64(
-  imageSrc: string
-): Promise<{ base64: string; mimeType: 'image/jpeg'; previewUrl: string }> {
+function loadImageElement(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      const maxDim = 1024;
-      let width = img.naturalWidth || img.width;
-      let height = img.naturalHeight || img.height;
-      if (width > maxDim || height > maxDim) {
-        const scale = maxDim / Math.max(width, height);
-        width = Math.round(width * scale);
-        height = Math.round(height * scale);
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        reject(new Error('Unable to prepare image canvas.'));
-        return;
-      }
-      ctx.drawImage(img, 0, 0, width, height);
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.86);
-      const base64 = dataUrl.split(',')[1] || '';
-      resolve({ base64, mimeType: 'image/jpeg', previewUrl: dataUrl });
-    };
-    img.onerror = () => reject(new Error('Could not decode the selected image.'));
-    img.src = imageSrc;
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('Could not read the selected meal image.'));
+    img.src = src;
   });
 }
 
@@ -108,11 +64,12 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
   const [capturedImageUrl, setCapturedImageUrl] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [heroImgFailed, setHeroImgFailed] = useState(false);
+  const [confThreshold, setConfThreshold] = useState<number>(0.35);
 
-  // Live AI vision detection states
+  // Local on-device vision detection states
   const [isScanning, setIsScanning] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
-  const [plateSummary, setPlateSummary] = useState<string | null>(null);
+  const [scanNotice, setScanNotice] = useState<string | null>(null);
   const [hoveredUid, setHoveredUid] = useState<string | null>(null);
 
   // Manual add state
@@ -143,79 +100,65 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
     };
   }, []);
 
-  const runAiFoodScan = async (imageSrc: string) => {
+  const runOnDeviceScan = async (imageSrc: string) => {
     setIsScanning(true);
     setScanError(null);
-    setPlateSummary(null);
+    setScanNotice(null);
+    setCapturedImageUrl(imageSrc);
 
     try {
-      const { base64, mimeType, previewUrl } = await compressImageSourceToJpegBase64(imageSrc);
-      setCapturedImageUrl(previewUrl);
+      const imgEl = await loadImageElement(imageSrc);
+      const detections = await detectFoodInBrowser(imgEl, confThreshold);
 
-      const response = await fetch('/api/detect-food', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: base64, mimeType }),
-      });
-
-      const data = (await response.json()) as DetectFoodResponse;
-      if (!response.ok) {
-        throw new Error(
-          data.error || 'Unable to scan this image right now. Please try again shortly.'
-        );
-      }
-
-      setPlateSummary(data.plateSummary || null);
-      if (data.suggestedMealLabel) {
-        onChangeMealLabel(data.suggestedMealLabel);
-      }
-
-      if (!data.detections || data.detections.length === 0) {
+      if (detections.length === 0) {
         onChangePlateItems([]);
-        setScanError(
-          data.plateSummary ||
-            'No distinct food items were detected in this photograph. Try better lighting or add items manually on the right.'
+        setScanNotice(
+          'No COCO food items or bowls exceeded the confidence threshold in this frame. Lower the threshold or add dishes manually on the right.'
         );
         return;
       }
 
-      const detectedDrafts: PlateItemDraft[] = data.detections.map((det) => {
-        const isMatched = Boolean(det.matchedCanonicalFood);
-        const foodName = isMatched ? det.matchedCanonicalFood : det.rawLabel;
-        const defPortion = isMatched
+      const detectedDrafts: PlateItemDraft[] = detections.map((det) => {
+        const isDirect = Boolean(det.matchedCanonicalFood);
+        const foodName = isDirect ? det.matchedCanonicalFood : '';
+        const defPortion = isDirect
           ? getDefaultPortion(foodName)
-          : { quantity: det.suggestedQuantity || 1, unit: 'Servings' as PortionUnit };
-
-        const suggestedQty =
-          det.suggestedQuantity > 0 ? det.suggestedQuantity : defPortion.quantity;
-        const needsVerify = det.needsVerification || !isMatched;
+          : { quantity: 1, unit: 'Katoris' as PortionUnit };
 
         return {
           uid: uid(),
           foodName,
-          originalAiLabel: det.rawLabel || foodName,
-          confidence: null,
-          detectionCertainty: det.certainty,
+          originalAiLabel: det.rawLabel,
+          confidence: det.confidence,
+          detectionCertainty:
+            det.confidence >= 0.7 ? 'high' : det.confidence >= 0.45 ? 'medium' : 'low',
           visualNote: det.visualNote,
           box2d: det.box2d,
-          isUncertain: needsVerify,
-          quantity: suggestedQty,
+          isUncertain: det.needsVerification,
+          quantity: defPortion.quantity,
           unit: defPortion.unit,
           portionSource: 'Estimated default',
-          verificationStatus: needsVerify
+          verificationStatus: det.needsVerification
             ? 'Uncertain — requires verification'
             : 'Confirmed AI prediction',
-          confirmed: !needsVerify,
+          confirmed: !det.needsVerification,
           markerCoords: null,
         };
       });
 
       onChangePlateItems(detectedDrafts);
+
+      const uncertainCount = detectedDrafts.filter((d) => d.isUncertain).length;
+      setScanNotice(
+        uncertainCount > 0
+          ? `Detected ${detectedDrafts.length} region(s) on-device (${uncertainCount} bowl/item flagged for quick dish selection on the right).`
+          : `Detected ${detectedDrafts.length} food item(s) directly on-device. Review portions on the right.`
+      );
     } catch (err) {
       const msg =
         err instanceof Error
           ? err.message
-          : 'Detection failed. Please try again or add foods manually.';
+          : 'On-device model could not run in this browser. You can still log foods manually on the right.';
       setScanError(msg);
     } finally {
       setIsScanning(false);
@@ -242,7 +185,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
       });
       streamRef.current = stream;
       setCapturedImageUrl(null);
-      setPlateSummary(null);
+      setScanNotice(null);
       setCameraActive(true);
       requestAnimationFrame(() => {
         if (videoRef.current) {
@@ -271,7 +214,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
     stopCamera();
-    void runAiFoodScan(dataUrl);
+    void runOnDeviceScan(dataUrl);
   };
 
   const handleFileChange = (file: File | undefined) => {
@@ -291,7 +234,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
     reader.onload = () => {
       if (typeof reader.result === 'string') {
         stopCamera();
-        void runAiFoodScan(reader.result);
+        void runOnDeviceScan(reader.result);
       }
     };
     reader.onerror = () => {
@@ -304,7 +247,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
     stopCamera();
     setInputMode('upload');
     setUploadError(null);
-    void runAiFoodScan(HERO_IMAGE_SRC);
+    void runOnDeviceScan(HERO_IMAGE_SRC);
   };
 
   const handleManualFoodChange = (foodName: string) => {
@@ -357,7 +300,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
       markerCoords: null,
     }));
     setCapturedImageUrl(null);
-    setPlateSummary(null);
+    setScanNotice(null);
     setScanError(null);
     onChangePlateItems(entries);
     onChangeMealLabel(preset.label);
@@ -408,6 +351,9 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
         const isHighlighted = hoveredUid === item.uid;
         const borderColor = item.isUncertain ? '#B88446' : '#527B60';
         const tagBg = item.isUncertain ? '#B88446' : '#294C38';
+        const displayLabel = item.foodName || item.originalAiLabel || 'Uncertain Food';
+        const confSuffix =
+          item.confidence !== null ? ` ${Math.round(item.confidence * 100)}%` : '';
 
         return (
           <div
@@ -430,10 +376,10 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
           >
             <span
               style={{ backgroundColor: tagBg }}
-              className="absolute -top-6 left-0 px-2 py-0.5 text-[11px] font-medium text-white rounded whitespace-nowrap shadow-xs"
+              className="absolute -top-6 left-0 px-2 py-0.5 text-[11px] font-medium text-white rounded whitespace-nowrap shadow-xs tabular-nums"
             >
-              {item.foodName}
-              {item.isUncertain ? ' · Verify' : ''}
+              {displayLabel}
+              {confSuffix}
             </span>
           </div>
         );
@@ -452,9 +398,9 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
               What is on your plate, and what does it contain?
             </h1>
             <p className="mt-5 text-[15px] sm:text-base text-[#758276] leading-relaxed max-w-xl">
-              Capture a meal with your camera or upload a photo to identify everyday Indian and
-              international dishes, confirm familiar portions like katoris and rotis, and unlock
-              holistic Meal Intelligence.
+              An on-device computer vision and nutrition intelligence platform for everyday Indian
+              and international meals. Runs directly in your browser with zero external API keys—pair
+              camera detection with confirmed portions and holistic Meal Intelligence.
             </p>
           </div>
 
@@ -478,7 +424,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
               className="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-[#294C38] bg-[#DCEBDD] hover:bg-[#C6DBC8] rounded-lg transition-colors duration-150 whitespace-nowrap"
             >
               <ScanLine className="w-4 h-4" />
-              Try Live AI Scan
+              Test On-Device Scan
             </button>
             <button
               type="button"
@@ -513,7 +459,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
             )}
             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[#25352B]/80 via-[#25352B]/35 to-transparent p-5">
               <p className="text-xs text-[#F3F7F0]/90">
-                Built for everyday plates · Katori, roti, piece, cup &amp; gram references
+                100% browser-local vision · Katori, roti, piece, cup &amp; gram references
               </p>
             </div>
           </div>
@@ -527,8 +473,8 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
       >
         {[
           { step: '01', title: 'Food Input', desc: 'Camera or photo' },
-          { step: '02', title: 'AI Detection', desc: 'Visual boxes & labels' },
-          { step: '03', title: 'Verification', desc: 'Confirm or correct' },
+          { step: '02', title: 'Local Detection', desc: 'On-device COCO-SSD' },
+          { step: '03', title: 'Verification', desc: 'Confirm or relabel' },
           { step: '04', title: 'Portions', desc: 'Katori, piece, grams' },
           { step: '05', title: 'Meal Intelligence', desc: 'Balance & variety' },
           { step: '06', title: 'History', desc: 'Log & trends' },
@@ -547,13 +493,13 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
         id="scanner-studio"
         className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start scroll-mt-20"
       >
-        {/* Left: Live Camera & Photo AI Scanner */}
+        {/* Left: Live Camera & Photo On-Device Scanner */}
         <div className="lg:col-span-7 bg-[#FFFFFF] border border-[#DCE4D9] rounded-2xl p-6 space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
-              <h2 className="text-lg font-bold text-[#294C38]">AI Food Scanner</h2>
+              <h2 className="text-lg font-bold text-[#294C38]">On-Device Food Scanner</h2>
               <p className="text-xs text-[#758276] mt-0.5">
-                Capture a live frame or upload a photo to detect dishes automatically.
+                Runs locally in your browser with TensorFlow.js (COCO-SSD) — no API key needed.
               </p>
             </div>
 
@@ -586,6 +532,26 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
             </div>
           </div>
 
+          {/* Confidence Threshold Slider */}
+          <div className="flex items-center justify-between gap-4 bg-[#F3F7F0] border border-[#DCE4D9] rounded-xl px-4 py-2.5 text-xs">
+            <label htmlFor="conf-slider" className="font-medium text-[#294C38] whitespace-nowrap">
+              Detection Threshold
+            </label>
+            <input
+              id="conf-slider"
+              type="range"
+              min={0.15}
+              max={0.8}
+              step={0.05}
+              value={confThreshold}
+              onChange={(e) => setConfThreshold(parseFloat(e.target.value))}
+              className="flex-1 accent-[#527B60]"
+            />
+            <span className="font-semibold text-[#294C38] tabular-nums w-10 text-right">
+              {Math.round(confThreshold * 100)}%
+            </span>
+          </div>
+
           {/* Viewport */}
           {inputMode === 'camera' ? (
             <div className="space-y-4">
@@ -601,7 +567,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                   <div className="relative w-full h-full">
                     <img
                       src={capturedImageUrl}
-                      alt="Captured meal with detected food boxes"
+                      alt="Captured meal with on-device detection boxes"
                       className="w-full h-full object-cover"
                     />
                     {renderBoundingBoxes()}
@@ -613,8 +579,9 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                       Point Your Camera at a Meal
                     </p>
                     <p className="text-xs text-[#758276] mt-1.5 leading-relaxed">
-                      Mobile browsers automatically prefer the rear camera. Capture a clear frame
-                      and NutriScan AI will identify each visible dish for your review.
+                      Mobile browsers automatically prefer the rear camera. Directly recognizes
+                      standard COCO foods (Apple, Banana, Orange, Pizza, Sandwich, Cake) and flags
+                      bowls/cups for quick Indian dish selection.
                     </p>
                   </div>
                 )}
@@ -622,9 +589,9 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                 {isScanning && (
                   <div className="absolute inset-0 bg-[#25352B]/55 backdrop-blur-[2px] flex flex-col items-center justify-center text-white p-4 text-center">
                     <Loader2 className="w-7 h-7 animate-spin mb-2.5" />
-                    <p className="text-sm font-semibold">Identifying foods on your plate...</p>
+                    <p className="text-sm font-semibold">Running on-device food detection...</p>
                     <p className="text-xs text-[#DCEBDD] mt-1">
-                      Detecting dishes and locating bounding regions
+                      First run loads the lightweight browser model locally
                     </p>
                   </div>
                 )}
@@ -660,7 +627,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                       className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-[#294C38] hover:bg-[#527B60] disabled:opacity-60 rounded-lg transition-colors whitespace-nowrap"
                     >
                       <ScanLine className="w-4 h-4" />
-                      Capture &amp; Scan Meal
+                      Capture &amp; Detect
                     </button>
                     <button
                       type="button"
@@ -677,7 +644,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                     <button
                       type="button"
                       disabled={isScanning}
-                      onClick={() => void runAiFoodScan(capturedImageUrl)}
+                      onClick={() => void runOnDeviceScan(capturedImageUrl)}
                       className="inline-flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-medium text-[#294C38] bg-[#E8F0E5] hover:bg-[#DCEBDD] disabled:opacity-60 rounded-lg transition-colors"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
@@ -687,7 +654,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                       type="button"
                       onClick={() => {
                         setCapturedImageUrl(null);
-                        setPlateSummary(null);
+                        setScanNotice(null);
                         setScanError(null);
                       }}
                       className="px-2.5 py-2 text-xs font-medium text-[#758276] hover:text-[#25352B]"
@@ -717,7 +684,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                   <div className="relative w-full h-full">
                     <img
                       src={capturedImageUrl}
-                      alt="Uploaded meal with AI detection overlays"
+                      alt="Uploaded meal with on-device detection overlays"
                       className="w-full h-full object-cover"
                     />
                     {renderBoundingBoxes()}
@@ -737,7 +704,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                       Drop a meal photo here, or browse files
                     </p>
                     <p className="text-xs text-[#758276] mt-1">
-                      AI automatically identifies dishes upon upload · JPG, PNG, WebP
+                      On-device browser detection runs automatically · JPG, PNG, WebP
                     </p>
                   </div>
                 )}
@@ -745,9 +712,9 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                 {isScanning && (
                   <div className="absolute inset-0 bg-[#25352B]/55 backdrop-blur-[2px] flex flex-col items-center justify-center text-white p-4 text-center">
                     <Loader2 className="w-7 h-7 animate-spin mb-2.5" />
-                    <p className="text-sm font-semibold">Scanning meal photograph...</p>
+                    <p className="text-sm font-semibold">Running on-device detection...</p>
                     <p className="text-xs text-[#DCEBDD] mt-1">
-                      Matching visible foods to verified Indian &amp; international references
+                      Processing locally in your browser — nothing leaves your device
                     </p>
                   </div>
                 )}
@@ -790,7 +757,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                   <button
                     type="button"
                     disabled={isScanning}
-                    onClick={() => void runAiFoodScan(capturedImageUrl)}
+                    onClick={() => void runOnDeviceScan(capturedImageUrl)}
                     className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-[#527B60] hover:text-[#294C38]"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
@@ -801,14 +768,11 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
             </div>
           )}
 
-          {/* Plate Summary or Scan Error */}
-          {plateSummary && !scanError && (
+          {/* Scan Notice or Error */}
+          {scanNotice && !scanError && (
             <div className="bg-[#DCEBDD]/50 border border-[#C6DBC8] rounded-xl px-4 py-3 text-xs text-[#25352B] flex items-start gap-2.5">
               <Check className="w-4 h-4 text-[#294C38] shrink-0 mt-0.5" />
-              <div>
-                <span className="font-semibold text-[#294C38]">AI Visual Summary:</span>{' '}
-                {plateSummary}
-              </div>
+              <span>{scanNotice}</span>
             </div>
           )}
 
@@ -853,7 +817,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
               Verification &amp; Portion Confirmation
             </h2>
             <p className="text-xs text-[#758276] mt-0.5">
-              Verify detected labels, fix uncertain items, and confirm real portions.
+              Verify detected labels, assign dishes to detected bowls, and confirm real portions.
             </p>
           </div>
 
@@ -891,21 +855,13 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
             ) : (
               <div className="divide-y divide-[#E8F0E5] border border-[#DCE4D9] rounded-xl bg-white">
                 {plateItems.map((item) => {
-                  const units = getAvailableUnits(item.foodName);
-                  const { grams, conversionNote } = convertToGrams(
-                    item.foodName,
-                    item.quantity,
-                    item.unit
-                  );
                   const isKnown = CANONICAL_FOOD_CLASSES.includes(item.foodName);
-                  const certaintyLabel =
-                    item.detectionCertainty === 'high'
-                      ? 'High visual certainty'
-                      : item.detectionCertainty === 'medium'
-                      ? 'Medium visual certainty'
-                      : item.detectionCertainty === 'low'
-                      ? 'Low certainty — verify'
-                      : 'Manual entry';
+                  const units = item.foodName
+                    ? getAvailableUnits(item.foodName)
+                    : (['Katoris', 'Pieces', 'Cups', 'Grams (g)', 'Servings'] as PortionUnit[]);
+                  const { grams, conversionNote } = item.foodName
+                    ? convertToGrams(item.foodName, item.quantity, item.unit)
+                    : { grams: 0, conversionNote: 'Select dish to calculate weight' };
 
                   return (
                     <div
@@ -920,27 +876,38 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                         <div className="min-w-0 flex-1">
                           <select
                             aria-label="Verify or correct food label"
-                            value={isKnown ? item.foodName : '__unlisted__'}
+                            value={isKnown ? item.foodName : '__select__'}
                             onChange={(e) => {
-                              if (e.target.value !== '__unlisted__') {
+                              if (e.target.value !== '__select__') {
                                 updateItem(item.uid, { foodName: e.target.value });
                               }
                             }}
                             className="w-full text-sm font-semibold text-[#25352B] bg-transparent border-b border-transparent hover:border-[#DCE4D9] focus:border-[#527B60] focus:outline-none pb-0.5"
                           >
                             {!isKnown && (
-                              <option value="__unlisted__">
-                                {item.foodName} (Unlisted — select match or keep)
+                              <option value="__select__">
+                                {item.foodName
+                                  ? `${item.foodName} (Unlisted — pick match)`
+                                  : '-- Select dish for detected item --'}
                               </option>
                             )}
-                            {CANONICAL_FOOD_CLASSES.map((name) => (
-                              <option key={name} value={name}>
-                                {name}
-                              </option>
-                            ))}
+                            <optgroup label="Indian Staples & Everyday Meals">
+                              {CANONICAL_FOOD_CLASSES.slice(0, 20).map((name) => (
+                                <option key={name} value={name}>
+                                  {name}
+                                </option>
+                              ))}
+                            </optgroup>
+                            <optgroup label="International Foods">
+                              {CANONICAL_FOOD_CLASSES.slice(20).map((name) => (
+                                <option key={name} value={name}>
+                                  {name}
+                                </option>
+                              ))}
+                            </optgroup>
                           </select>
 
-                          <p className="text-[11px] text-[#758276] mt-0.5">
+                          <p className="text-[11px] text-[#758276] mt-0.5 tabular-nums">
                             <span
                               className={
                                 item.isUncertain
@@ -950,8 +917,10 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                             >
                               {item.verificationStatus}
                             </span>{' '}
-                            · {certaintyLabel}
-                            {!isKnown && ' · Not in nutrition DB'}
+                            ·{' '}
+                            {item.confidence !== null
+                              ? `${Math.round(item.confidence * 100)}% model confidence`
+                              : 'Manual entry'}
                           </p>
                           {item.visualNote && (
                             <p className="text-[11px] text-[#758276] mt-0.5">{item.visualNote}</p>
@@ -960,7 +929,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
 
                         <button
                           type="button"
-                          aria-label={`Remove ${item.foodName}`}
+                          aria-label={`Remove ${item.foodName || item.originalAiLabel || 'item'}`}
                           onClick={() => removeItem(item.uid)}
                           className="p-1.5 text-[#758276] hover:text-[#9A3412] rounded-md transition-colors"
                         >
@@ -971,7 +940,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                       <div className="grid grid-cols-2 gap-2">
                         <input
                           type="number"
-                          aria-label={`Quantity for ${item.foodName}`}
+                          aria-label="Portion quantity"
                           min={0.1}
                           max={2000}
                           step={item.unit === 'Grams (g)' ? 10 : 0.5}
@@ -985,7 +954,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                           className="px-2.5 py-1.5 text-xs bg-[#F3F7F0] border border-[#DCE4D9] rounded-lg tabular-nums focus:outline-none focus:border-[#527B60]"
                         />
                         <select
-                          aria-label={`Unit for ${item.foodName}`}
+                          aria-label="Portion unit"
                           value={item.unit}
                           onChange={(e) =>
                             updateItem(item.uid, {
@@ -1005,13 +974,20 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
 
                       <div className="flex items-center justify-between text-[11px] text-[#758276] tabular-nums">
                         <span>
-                          Est. weight: <strong className="text-[#294C38]">{grams} g</strong> (
-                          {conversionNote})
+                          {item.foodName ? (
+                            <>
+                              Est. weight: <strong className="text-[#294C38]">{grams} g</strong> (
+                              {conversionNote})
+                            </>
+                          ) : (
+                            conversionNote
+                          )}
                         </span>
                         <label className="inline-flex items-center gap-1.5 cursor-pointer text-[#25352B]">
                           <input
                             type="checkbox"
-                            checked={item.confirmed}
+                            disabled={!item.foodName}
+                            checked={item.confirmed && Boolean(item.foodName)}
                             onChange={(e) =>
                               updateItem(item.uid, {
                                 confirmed: e.target.checked,
@@ -1023,7 +999,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
                                     : item.verificationStatus,
                               })
                             }
-                            className="accent-[#294C38] rounded"
+                            className="accent-[#294C38] rounded disabled:opacity-40"
                           />
                           Confirm
                         </label>
@@ -1039,7 +1015,7 @@ export const ScannerWorkspace: React.FC<ScannerWorkspaceProps> = ({
           <div className="border border-[#DCE4D9] rounded-xl p-4 bg-[#F3F7F0]/60 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-semibold text-[#294C38]">
-                Add Missing Food Manually
+                Add Food Item Manually
               </span>
               <button
                 type="button"

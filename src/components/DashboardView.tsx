@@ -396,9 +396,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <p className="text-xs font-medium text-[#527B60] mb-1">AI Transparency</p>
           <h3 className="text-base font-bold text-[#294C38]">AI Detection Insights</h3>
           <p className="text-xs text-[#758276] mt-0.5 max-w-2xl">
-            Every AI prediction, visual certainty tier, and human verification edit is recorded
-            openly. AI visual recognition can misread gravies or hidden ingredients, so human
-            verification remains part of every analysis.
+            Displays actual on-device model confidence scores where available alongside user
+            verifications and corrections. Confidence values are never fabricated for manually added
+            foods.
           </p>
         </div>
         <div className="overflow-x-auto">
@@ -407,41 +407,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <tr className="bg-[#F3F7F0] text-xs text-[#758276] border-b border-[#DCE4D9]">
                 <th className="py-3 px-5 font-semibold">Confirmed Food</th>
                 <th className="py-3 px-4 font-semibold">Original AI Label</th>
-                <th className="py-3 px-4 font-semibold">Visual Certainty</th>
+                <th className="py-3 px-4 font-semibold">Model Confidence</th>
                 <th className="py-3 px-4 font-semibold">Verification Status</th>
                 <th className="py-3 px-4 font-semibold">Portion Provenance</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#E8F0E5]">
-              {items.map((item, idx) => {
-                const certaintyText =
-                  item.detectionCertainty === 'high'
-                    ? 'High certainty'
-                    : item.detectionCertainty === 'medium'
-                    ? 'Medium certainty'
-                    : item.detectionCertainty === 'low'
-                    ? 'Low — verified by user'
-                    : 'Manual entry';
-
-                return (
-                  <tr key={`ai-${item.foodName}-${idx}`} className="hover:bg-[#F3F7F0]/50">
-                    <td className="py-3 px-5">
-                      <div className="font-medium text-[#25352B]">{item.foodName}</div>
-                      {item.visualNote && (
-                        <div className="text-xs text-[#758276] mt-0.5">{item.visualNote}</div>
-                      )}
-                    </td>
-                    <td className="py-3 px-4 text-[#758276]">
-                      {item.originalAiLabel ?? 'Added manually'}
-                    </td>
-                    <td className="py-3 px-4 text-[#25352B]">{certaintyText}</td>
-                    <td className="py-3 px-4 text-[#294C38] font-medium">
-                      {item.verificationStatus}
-                    </td>
-                    <td className="py-3 px-4 text-[#758276]">{item.portionSource}</td>
-                  </tr>
-                );
-              })}
+              {items.map((item, idx) => (
+                <tr key={`ai-${item.foodName}-${idx}`} className="hover:bg-[#F3F7F0]/50">
+                  <td className="py-3 px-5">
+                    <div className="font-medium text-[#25352B]">{item.foodName}</div>
+                    {item.visualNote && (
+                      <div className="text-xs text-[#758276] mt-0.5">{item.visualNote}</div>
+                    )}
+                  </td>
+                  <td className="py-3 px-4 text-[#758276]">
+                    {item.originalAiLabel ?? 'Added manually'}
+                  </td>
+                  <td className="py-3 px-4 tabular-nums text-[#25352B]">
+                    {item.confidence !== null
+                      ? `${(item.confidence * 100).toFixed(1)}%`
+                      : 'Unavailable (manual entry)'}
+                  </td>
+                  <td className="py-3 px-4 text-[#294C38] font-medium">
+                    {item.verificationStatus}
+                  </td>
+                  <td className="py-3 px-4 text-[#758276]">{item.portionSource}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
